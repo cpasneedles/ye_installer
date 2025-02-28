@@ -1,0 +1,99 @@
+name: Release Tauri App
+
+# Trigger on tag push with v* pattern
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      # Checkout the private repository
+      - name: Checkout Private Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Ensure tags are fetched properly
+
+      # Debug: Show tag and repo info
+      - name: Debug Info
+        run: |
+          echo "Tag: ${{ github.ref_name }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Event: ${{ github.event_name }}"
+          git tag -l  # List all tags to verify they're available
+
+      # Setup Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'  # Cache npm dependencies
+
+      # Install Rust
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Install dependencies
+      - name: Install Dependencies
+        run: npm install
+
+      # Build Tauri app
+      - name: Build Tauri App
+        run: npm run tauri build
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}  # Optional
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}  # Optional
+
+      # Debug: List build output
+      - name: List Build Output
+        run: |
+          dir src-tauri\target\release
+          dir src-tauri\target\release\bundle
+          dir src-tauri\target\release\bundle\msi || echo "MSI directory not found"
+
+      # Configure Git
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+
+      # Checkout public repository
+      - name: Checkout Public Repository
+        uses: actions/checkout@v4
+        with:
+          repository: 'cpasneedles/ye_installer'  # Your public repo
+          token: ${{ secrets.PUBLIC_REPO_TOKEN }}  # PAT with repo scope
+          path: public-release
+
+      # Create release directory
+      - name: Create Release Directory
+        run: mkdir -p public-release\releases\${{ github.ref_name }}
+        shell: cmd
+
+      # Copy artifacts to public repo
+      - name: Copy Release Artifacts
+        run: |
+          copy src-tauri\target\release\bundle\msi\*.msi public-release\releases\${{ github.ref_name }}\ || echo "No MSI files found to copy"
+        shell: cmd  # Use Windows CMD for copy command
+
+      # Commit and push to public repo
+      - name: Commit and Push to Public Repo
+        working-directory: public-release
+        run: |
+          git add releases/${{ github.ref_name }} || echo "Nothing to add"
+          git commit -m "Release ${{ github.ref_name }}" || echo "Nothing to commit"
+          git push origin main || echo "Push failed"
+
+      # Create GitHub Release in public repo
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          repository: 'cpasneedles/ye_installer'
+          token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          files: src-tauri/target/release/bundle/msi/*.msi
+        env:
+          GITHUB_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
